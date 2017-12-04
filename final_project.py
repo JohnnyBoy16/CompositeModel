@@ -12,29 +12,38 @@ ref_file = 'Refs\\ref 21JUN2016\\200 ps waveform.txt'
 # the number of layers in the composite
 n_layers = 10
 
-# thickness of the sample in mm
-# thickness = 6.35  # 6.35 mm = 1/4 inch
-
 # thickness of the fiberglass layers in mm
 t_fiberglass = 0.25
 
 # thickness of the epoxy layers in mm
 t_epoxy = 0.05
 
-# thickness of the sample in mm
-thickness = n_layers*(t_fiberglass+t_epoxy) - t_epoxy
-
 # diameter of the beam in mm
 beam_width = 1.5
 
 # width of the fiberglass in mm
-width = 5
+width = beam_width
 
-# number of voids to have in the simulation
-n_voids = 15
+# the chance of having a void in each layer
+p_void = 0.4
 
 # width & height of the void in mm
-void_size = np.array([0.5, t_epoxy])  # for now have void occupy same thickness as epoxy
+# for now have void occupy same thickness as epoxy, so the entire thickness of the composite
+# layer is occupied by the void if there is one
+void_size = np.array([0.5, t_epoxy])
+
+n_fiberglass = 1.85 - 1j*0.02  # index of refraction of fiberglass
+n_epoxy = 1.45 - 1j*0.01  # index of refraction of the epoxy
+
+# the angle of the THz system in the lab in 17.5 deg., but for now assume straight on for
+# simplicity
+
+# incoming angle of the THz beam in degrees
+theta0 = 0.0
+theta0 *= np.pi / 180  # convert to radians
+
+# thickness of the sample in mm
+thickness = n_layers*(t_fiberglass+t_epoxy) - t_epoxy
 
 ###################################################
 # Begin simulation
@@ -91,104 +100,75 @@ plt.xlim(0, 3.5)
 plt.grid()
 
 # x location of the void center
-x_centers = np.random.rand(n_voids) * width
+void_in_layer = np.random.binomial(1, p_void, n_layers-1)
 
-# y location of the void center
-# assume that voids can only occur at layer boundaries, so this is the layer at
-# which the void will occur
+# print a warning if no voids were created in the simulation
+if not np.sum(void_in_layer):
+    print('No voids created in simulation!')
 
-# random.randint() high is exclusive
-y_centers_int = np.random.randint(low=1, high=n_layers, size=n_voids).astype(float)
-y_centers = y_centers_int * (t_fiberglass + t_epoxy) - t_epoxy/2
+for i in range(len(void_in_layer)):
+    if void_in_layer[i]:
+        print('void in layer', (i+1))
 
-y_centers.sort()
+# for now we will assume that the void will be fully covered by the beam
+beam_corner = (-beam_width / 2, 0)
+beam = Rectangle(beam_corner, beam_width, n_layers, facecolor='r', alpha=0.25)
 
-# the rectangles that represent voids are constructed by passing through the lower left corner to
-# the Rectangle class below in the for loop
-x_corners = x_centers - void_size[0] / 2
-y_corners = y_centers - void_size[1] / 2
-
-beam_corner = (width/2 - beam_width/2, 0)
-
-# build the voids and store them in a list
-# this allows us to keep track of their location, so we can see if the THz beam
-# hits their boundary box later
 void_list = list()
-for i in range(n_voids):
-    void = Rectangle((x_corners[i], y_corners[i]), void_size[0], void_size[1])
-    void_list.append(void)
+for i in range(len(void_in_layer)):
+    if void_in_layer[i]:
+        x_corner = -void_size[0] / 2
+        y_corner = (i+1) * (t_fiberglass+t_epoxy)
+        void = Rectangle((x_corner, y_corner), void_size[0], -void_size[1])
+        void_list.append(void)
 
 # create a patch collection object so we can plot the voids
-pc = PatchCollection(void_list, alpha=0.5)
+pc = PatchCollection(void_list)
 
-fig = plt.figure('Location of void centers')
+fig = plt.figure('Diagram of Simulation')
 axis = fig.add_subplot(111)
+
+# add the beam to the diagram
+# just a semi-transparent red rectangle
+# axis.add_patch(beam)
+
+# add the voids to the diagram
+
+axis.add_collection(pc)
+
+# add dotted lines where the layer boundaries are
 for i in range(1, n_layers):  # put a line at each layer boundary (middle of epoxy layer)
     layer_height = i * (t_fiberglass+t_epoxy) - (t_epoxy/2)
     plt.axhline(layer_height, color='k', linestyle='--', linewidth=0.5)
 
-# add the voids to the plot
-axis.add_collection(pc)
-
-# add another rectangle to represent THz beam
-beam = Rectangle(beam_corner, beam_width, n_layers, facecolor='r', alpha=0.25)
-axis.add_patch(beam)
-
-# use a scatter plot to show void center
-axis.scatter(x=x_centers, y=y_centers, color='g', label='Void Center')
-
-plt.xlabel('X Location (mm)')
-plt.ylabel('Sample Depth')
 plt.title('Diagram of Simulation')
-plt.xlim(0, width)
-# plt.yticks(np.arange(0, n_layers+1))
+plt.xlabel('X Location (mm)')
+plt.ylabel('Depth into the composite (mm)')
 plt.ylim(thickness, 0)  # flip y-axis so layer 0 is on top
-plt.legend()
+plt.xlim(beam_corner[0], beam_corner[0]+beam_width)
 
-# now we want to see if the THz beam hits any of the voids
-in_beam = [False] * n_voids  # create a list stating whether the beam hits the void or not
+# start by constructing a model of the composite sample with no voids present
 
-# beam left and right bounds
-beam_lb = beam.get_x()
-beam_rb = beam_lb + beam_width
+# the angle of the beam in each layer, including air on each side of sample
+theta_array = np.zeros(n_layers*2 + 1)
 
-voids_hit = list()  # contains the voids actually hit by the beam
+theta_array[0] = theta0  # initial and last angle are the incoming angle
+theta_array[-1] = theta0
 
-for i, void in enumerate(void_list):
-    void_lb = void.get_x()
-    void_rb = void_lb + void.get_width()
-    if beam_lb < void_lb < beam_rb or beam_lb < void_rb < beam_rb:
-        in_beam[i] = True
-        voids_hit.append(void)
+# for i in range(1, n_layers*2):
+#     theta_array[i] = sm.get_theta_out()
 
-print('Number of voids hit by beam = %d' % np.sum(in_beam))
 
-# max number of layers that can have voids is the number of voids hit
-n_layers_with_voids = len(voids_hit)
-for i in range(1, len(voids_hit)):
-    if voids_hit[i].get_y() == voids_hit[i-1].get_y():
-        n_layers_with_voids -= 1
 
-# print a yellow star on the voids that are in the beam
-for i in range(n_voids):
-    if in_beam[i]:
-        plt.scatter(x=x_centers[i], y=y_centers[i], marker='*', color='y')
 
-# start by assuming sample is homogeneous
-# start with angle straight on
-
-# air to fiberglass reflection and transmission coefficients
-r01 = sm.reflection_coefficient(1, 1.55)
-t01 = sm.transmission_coefficient(1, 1.55)
-
-# fiberglass to air reflection and transmission coefficients
-r10 = sm.reflection_coefficient(1.55, 1)
-t10 = sm.transmission_coefficient(1.55, 1)
-
-coverage = np.zeros(n_layers_with_voids)
+"""
+coverage = np.zeros(n_layers_with_voids+2)
 t_layers = np.zeros(n_layers_with_voids*2+1)
 
-j = 0
+coverage[0] = 1
+coverage[-1] = 1
+
+j = 1
 for i, void in enumerate(voids_hit):
 
     void_lb = void.get_x()
@@ -222,10 +202,51 @@ for i, void in enumerate(voids_hit):
         coverage[j] += (beam_rb - void_lb) / beam_width
         print('Coverage = %0.2f' % coverage[j])
 
+# coverage can not be greater than 1
 coverage[np.where(coverage > 1)] = 1
 
-# for i, void in enumerate(voids_hit):
-#     t_layers[i*2+1] = void.get_height()
-#
-#     if i == 0:
-#         t_layers
+d = np.zeros(2*n_layers_with_voids+1)
+d[0] = voids_hit[0].get_y() + voids_hit[0].get_height()
+d[1] = voids_hit[1].get_height()
+d[-1] = thickness - voids_hit[-1].get_y()
+
+j = 1
+for i in range(1, len(voids_hit)):
+
+    if voids_hit[i].get_y() != voids_hit[i-1].get_y():
+        d[j*2] = voids_hit[i].get_y()+voids_hit[i].get_height() - voids_hit[i-1].get_y()
+        d[j*2+1] = voids_hit[i].get_height()
+
+        j += 1
+
+theta = np.zeros(d.size+2)
+n = np.zeros(theta.shape, dtype=complex)
+n[0] = 1
+n[-1] = 1
+for i in range(1, len(n)-1):
+    if i % 2:  # odd
+        n[i] = n_fiberglass
+    else:
+        n[i] = 1.0
+
+gamma = sm.global_reflection_model(n, theta, freq, d, 2*n_layers_with_voids+1)
+
+e1 = e0 * gamma[0]
+
+return_amp = np.fft.irfft(e1) / dt
+
+plt.figure('Return Signal in Frequency Domain')
+plt.plot(freq, np.abs(e1), 'r')
+plt.title('Return Signal in Frequency Domain')
+plt.xlabel('Frequency (THz)')
+plt.ylabel('Amplitude')
+plt.xlim(0, 3.5)
+plt.grid()
+
+plt.figure('Return Signal in Time Domain')
+plt.plot(time, return_amp, 'r')
+plt.title('Return Signal in Time Domain')
+plt.xlabel('Time (ps)')
+plt.ylabel('Amplitude')
+plt.grid()
+"""
