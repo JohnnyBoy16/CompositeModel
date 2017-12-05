@@ -1,3 +1,5 @@
+import pdb
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -7,10 +9,11 @@ from matplotlib.collections import PatchCollection
 import sm_functions as sm
 
 # the file that contains the reference waveform off of an aluminum plate
-ref_file = 'Refs\\ref 21JUN2016\\200 ps waveform.txt'
+ref_file = 'Refs\\ref 11JUL2016\\110 ps waveform.txt'
 
 # the number of layers in the composite
-n_layers = 10
+# including epoxy layers
+n_layers = 19
 
 # thickness of the fiberglass layers in mm
 t_fiberglass = 0.25
@@ -43,7 +46,7 @@ theta0 = 0.0
 theta0 *= np.pi / 180  # convert to radians
 
 # thickness of the sample in mm
-thickness = n_layers*(t_fiberglass+t_epoxy) - t_epoxy
+thickness = n_layers//2*(t_fiberglass+t_epoxy) + t_fiberglass
 
 ###################################################
 # Begin simulation
@@ -65,7 +68,7 @@ df = 1 / (len(time)*dt)
 freq = np.linspace(0, len(time)/2*df, len(time)//2+1)
 
 # gate to remove the front artifact signal
-gate = 315
+gate = 400
 
 # remove the false signal
 ref_amp[:gate] = 0
@@ -85,7 +88,7 @@ e0 = np.fft.rfft(ref_amp) * dt
 
 plt.figure('Reference Signal In Time Domain')
 plt.plot(time, ref_amp, 'r')
-plt.axvline(time[315], color='k', linestyle='--')
+plt.axvline(time[gate], color='k', linestyle='--')
 plt.title('Reference Signal In Time Domain')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
@@ -99,8 +102,10 @@ plt.ylabel('Amplitude')
 plt.xlim(0, 3.5)
 plt.grid()
 
-# x location of the void center
-void_in_layer = np.random.binomial(1, p_void, n_layers-1)
+# whether or not there is a void in the composite layer
+void_in_layer = np.zeros(n_layers)
+for i in range(1, n_layers, 2):
+    void_in_layer[i] = np.random.binomial(1, p_void)
 
 # print a warning if no voids were created in the simulation
 if not np.sum(void_in_layer):
@@ -112,15 +117,17 @@ for i in range(len(void_in_layer)):
 
 # for now we will assume that the void will be fully covered by the beam
 beam_corner = (-beam_width / 2, 0)
-beam = Rectangle(beam_corner, beam_width, n_layers, facecolor='r', alpha=0.25)
+beam = Rectangle(beam_corner, beam_width, thickness, facecolor='r', alpha=0.25)
 
 void_list = list()
 for i in range(len(void_in_layer)):
     if void_in_layer[i]:
         x_corner = -void_size[0] / 2
-        y_corner = (i+1) * (t_fiberglass+t_epoxy)
+        y_corner = (i+1)//2 * (t_fiberglass+t_epoxy)
         void = Rectangle((x_corner, y_corner), void_size[0], -void_size[1])
         void_list.append(void)
+
+# TODO create a patch to add layers to diagram
 
 # create a patch collection object so we can plot the voids
 pc = PatchCollection(void_list)
@@ -150,16 +157,81 @@ plt.xlim(beam_corner[0], beam_corner[0]+beam_width)
 # start by constructing a model of the composite sample with no voids present
 
 # the angle of the beam in each layer, including air on each side of sample
-theta_array = np.zeros(n_layers*2 + 1)
+# for now let theta be all zeros for simplicity
+theta_array = np.zeros(n_layers+2)
 
-theta_array[0] = theta0  # initial and last angle are the incoming angle
-theta_array[-1] = theta0
+# create the array of index of refraction values for each layer in the simulation
+n = np.ones(n_layers+2, dtype=complex)
+for i in range(1, n_layers+1, 2):
+    n[i] = n_fiberglass
+    n[i+1] = n_epoxy
 
-# for i in range(1, n_layers*2):
-#     theta_array[i] = sm.get_theta_out()
+# the for loop above makes the last layer an epoxy layer, when it needs to be air
+# so correct that here
+n[-1] = 1.0
 
+# create an array of layer thicknesses
+thickness_array = np.zeros(n_layers)
+for i in range(n_layers):
+    if i % 2 == 0:  # if i is even it is a fiberglass layer
+        thickness_array[i] = t_fiberglass
+    else:
+        thickness_array[i] = t_epoxy
 
+# build an array that contains how large each void is relative to the beam size
+# leave this as zeros and pass to reflection model equation to create sample model with no defects
+coverage = np.zeros(n_layers)
 
+gamma = sm.global_reflection_model(n, theta_array, freq, thickness_array, n_layers, coverage)
+
+e1 = e0 * gamma[0]
+
+return_amp = np.fft.irfft(e1) / dt
+
+plt.figure('Sample with No Defects in Frequency Domain')
+plt.plot(freq, np.abs(e1), 'r')
+plt.title('Sample with No Defects in Frequency Domain')
+plt.xlabel('Frequency (THz)')
+plt.ylabel('Amplitude')
+plt.xlim(0, 3.5)
+plt.grid()
+
+plt.figure('Sample with No Defects in Time Domain')
+plt.plot(time, return_amp, 'r')
+plt.title('Sample with No Defects in Time Domain')
+plt.xlabel('Time (ps)')
+plt.ylabel('Amplitude')
+plt.grid()
+
+###################################################################################################
+
+# now change coverage based on whether this is a void or not and build the model with defects
+j = 0
+for i in range(len(void_in_layer)):
+    if void_in_layer[i]:
+        coverage[i] = void_list[j].get_width() / beam_width
+        j += 1
+
+gamma = sm.global_reflection_model(n, theta_array, freq, thickness_array, n_layers, coverage)
+
+e1 = e0 * gamma[0]
+
+return_amp = np.fft.irfft(e1) / dt
+
+plt.figure('Sample with Defects in Frequency Domain')
+plt.plot(freq, np.abs(e1), 'r')
+plt.title('Sample with Defects in Frequency Domain')
+plt.xlabel('Frequency (THz)')
+plt.ylabel('Amplitude')
+plt.xlim(0, 3.5)
+plt.grid()
+
+plt.figure('Sample with Defects in Time Domain')
+plt.plot(time, return_amp, 'r')
+plt.title('Sample with Defects in Time Domain')
+plt.xlabel('Time (ps)')
+plt.ylabel('Amplitude')
+plt.grid()
 
 """
 coverage = np.zeros(n_layers_with_voids+2)

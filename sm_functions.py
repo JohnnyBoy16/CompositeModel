@@ -182,7 +182,7 @@ def smooth_exponential_transition(e, delta):
     return e
 
 
-def global_reflection_model(n, theta, freq, d, n_layers, c=0.2998):
+def global_reflection_model(n, theta, freq, d, n_layers, coverage, c=0.2998):
     """
     Calculates the global reflection coefficient given in Orfanidis
     "Electromagnetic Waves & Antennas". The global reflection coefficient is used to solve
@@ -194,6 +194,7 @@ def global_reflection_model(n, theta, freq, d, n_layers, c=0.2998):
                 length is n_layers+2
     :param freq: An array of frequencies over which to calculate the coefficient
     :param n_layers: The number of layers in the structure
+    :param coverage: Percentage of the beam path occupied by the void
     :param c: The speed of light (default = 0.2998 mm/ps)
     :return: The global reflection coefficient over the supplied frequency range
     """
@@ -207,6 +208,24 @@ def global_reflection_model(n, theta, freq, d, n_layers, c=0.2998):
     for i in range(n_layers + 1):
         # determine the local reflection
         r[i] = reflection_coefficient(n[i], n[i+1], theta[i], theta[i+1])
+
+        if i == n_layers:
+            continue
+
+        if coverage[i] != 0:
+            # if there is a void at that layer, make reflection coefficient a weighted average
+            # between fiberglass-epoxy interface and fiberglass-air interface
+
+            # reflection coefficient of the void (air, n = 1)
+            r_void = reflection_coefficient(n[i], 1.0, theta[i], theta[i+1])
+            r[i] = r[i]*(1-coverage[i]) + r_void*coverage[i]
+            continue
+
+        if coverage[i-1] != 0:
+            # if there was a void in the previous layer we need to account for the reflection as
+            # the THz beam leaves the void
+            r_void = reflection_coefficient(1.0, n[i], theta[i], theta[i+1])
+            r[i] = r[i]*(1-coverage[i]) + r_void*coverage[i]
 
     # define the last global reflection coefficient as the local reflection coefficient
     gamma[-1, :] = r[-1]
