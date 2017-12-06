@@ -1,4 +1,5 @@
 import pdb
+import sys
 
 import numpy as np
 import pandas as pd
@@ -8,11 +9,41 @@ from matplotlib.collections import PatchCollection
 
 import sm_functions as sm
 
+sys.path.insert(0, 'C:\\PycharmProjects\\THzProcClass')
+from THzData import THzData
+
+basedir = 'C:\\Work\\Faint Defect Testing\\Yellow Composite'
+filename = 'Scan with Two Tape Defects F@FS (res=0.5mm).tvl'
+
+data = THzData(filename, basedir, gate=[[3111, 3302], [700, 900]])
+
+plt.figure('C-Scan Test')
+plt.imshow(data.c_scan, interpolation='none', cmap='gray', extent=data.c_scan_extent)
+plt.xlabel('X Scan Location (mm)')
+plt.ylabel('Y Scan Location (mm)')
+plt.colorbar()
+plt.grid()
+
+defect = data.c_scan[22:41, 46:60]
+normal_area = data.c_scan[22:41, 19:33]
+
+weights = np.ones_like(defect.flatten()) / defect.size
+
+plt.figure('Histogram')
+plt.hist(defect.flatten(), 15, weights=weights, facecolor='b', label='Tape')
+plt.hist(normal_area.flatten(), 15, weights=weights, facecolor='g', label='Normal')
+plt.title('Normalized Histogram of Pixel Values')
+plt.ylabel('Probability')
+plt.xlabel('Peak to Peak Voltage')
+plt.legend()
+
 # the file that contains the reference waveform off of an aluminum plate
 ref_file = 'Refs\\ref 11JUL2016\\110 ps waveform.txt'
 
+noise_file = 'NoiseWaveforms\\110 ps system noise.txt'
+
 # the number of layers in the composite
-# including epoxy layers
+# including epoxy layers, needs to be an odd number
 n_layers = 19
 
 # thickness of the fiberglass layers in mm
@@ -57,6 +88,9 @@ thickness = n_layers//2*(t_fiberglass+t_epoxy) + t_fiberglass
 ref_data = pd.read_csv(ref_file, delimiter='\t')
 time = ref_data['Optical Delay/ps'].values
 ref_amp = ref_data['Raw_Data/a.u.'].values
+
+noise_data = pd.read_csv(noise_file, delimiter='\t')
+noise_amp = noise_data['Raw_Data/a.u.'].values
 
 # shift the time array so it starts at zero
 time -= time[0]
@@ -214,12 +248,12 @@ for i in range(len(void_in_layer)):
 
 gamma = sm.global_reflection_model(n, theta_array, freq, thickness_array, n_layers, coverage)
 
-e1 = e0 * gamma[0]
+e1_flawed = e0 * gamma[0]
 
-return_amp = np.fft.irfft(e1) / dt
+return_amp_flawed = np.fft.irfft(e1_flawed) / dt
 
 plt.figure('Sample with Defects in Frequency Domain')
-plt.plot(freq, np.abs(e1), 'r')
+plt.plot(freq, np.abs(e1_flawed), 'r')
 plt.title('Sample with Defects in Frequency Domain')
 plt.xlabel('Frequency (THz)')
 plt.ylabel('Amplitude')
@@ -227,98 +261,93 @@ plt.xlim(0, 3.5)
 plt.grid()
 
 plt.figure('Sample with Defects in Time Domain')
-plt.plot(time, return_amp, 'r')
+plt.plot(time, return_amp_flawed, 'r')
+plt.axvline(time[1750], color='k', linestyle='--')
+plt.axvline(time[2500], color='k', linestyle='--')
 plt.title('Sample with Defects in Time Domain')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
 plt.grid()
 
-"""
-coverage = np.zeros(n_layers_with_voids+2)
-t_layers = np.zeros(n_layers_with_voids*2+1)
+print()
+print('Peak to Peak Value with no defects')
+print(return_amp[1750:2500].max() - return_amp[1750:2500].min())
+print()
+print('Peak to Peak value with defects')
+print(return_amp_flawed[1750:2500].max() - return_amp_flawed[1750:2500].min())
 
-coverage[0] = 1
-coverage[-1] = 1
+plt.figure('System Noise')
+plt.plot(time, noise_amp, 'r', linewidth=0.5)
+plt.title('System Noise')
+plt.xlabel('Time (ps)')
+plt.ylabel('Amplitude')
+plt.grid()
 
-j = 1
-for i, void in enumerate(voids_hit):
+corr = np.correlate(noise_amp, noise_amp, mode='full')
+plt.figure('Noise Correlation')
+plt.plot(corr, linewidth=0.5)
+plt.xlabel('Point')
+plt.ylabel('Correlation')
+plt.grid()
 
-    void_lb = void.get_x()
-    void_rb = void_lb + void.get_width()
+noise_mean = np.mean(noise_amp)
+noise_std = np.std(noise_amp)
 
-    if i != 0 and voids_hit[i].get_y() != voids_hit[i-1].get_y():
-        j += 1
+alpha1 = 0.0057178463460362833
+alpha2 = 0.0045599247356917505
 
-    # determine percentage of beam that will hit void
-    if void_lb < beam_lb and void_rb > beam_rb:  # void covers entire beam
-        print()
-        print('Void covers entire beam')
-        coverage[j] += 1
-        # entire beam will be multiplied by reflection coefficient
+# estimate alpha, time consuming
+alpha1 = 0
+alpha2 = 0
+for i in range(len(noise_amp)):
+    correlation = np.correlate(np.roll(noise_amp, i), np.roll(noise_amp, i+1), mode='full')
+    alpha1 += correlation[len(noise_amp)]
+    alpha2 += correlation[len(noise_amp)+1]
 
-    elif void_lb > beam_lb and void_rb < beam_rb:  # void in completely inside of beam
-        print()
-        print('Void completely inside of beam')
-        coverage[j] += void.get_width() / beam_width
-        print('Coverage = %0.2f' % coverage[j])
+alpha1 /= len(noise_amp)
+alpha2 /= len(noise_amp)
 
-    elif void_lb < beam_lb and void_rb < beam_rb:  # right part of void is inside beam
-        print()
-        print('Beam hits right part of void')
-        coverage[j] += (void_rb - beam_lb) / beam_width
-        print('Coverage = %0.2f' % coverage[j])
+noise_sim = np.zeros(len(noise_amp))
+noise_sim[0] = np.random.randn(1) * noise_std*10 + noise_mean  # initialize noise values
 
-    elif void_lb > beam_lb and void_rb > beam_rb:  # left part of void is inside beam
-        print()
-        print('Beam hits left part of void')
-        coverage[j] += (beam_rb - void_lb) / beam_width
-        print('Coverage = %0.2f' % coverage[j])
+w = np.random.randn(len(noise_amp))*noise_std*10 + noise_mean
 
-# coverage can not be greater than 1
-coverage[np.where(coverage > 1)] = 1
+for i in range(1, len(noise_amp)):
+    noise_sim[i] = alpha1*noise_sim[i-1] + w[i]
 
-d = np.zeros(2*n_layers_with_voids+1)
-d[0] = voids_hit[0].get_y() + voids_hit[0].get_height()
-d[1] = voids_hit[1].get_height()
-d[-1] = thickness - voids_hit[-1].get_y()
+plt.figure('Noise Simulation')
+plt.plot(time, noise_sim, 'r', linewidth=0.5)
+plt.xlabel('Time (ps)')
+plt.ylabel('Amplitude')
+plt.grid()
 
-j = 1
-for i in range(1, len(voids_hit)):
+plt.figure('Sample with Defects and Noise in Time Domain')
+plt.plot(time, return_amp_flawed+noise_sim, 'r')
+plt.title('Sample with Defects in Time Domain')
+plt.xlabel('Time (ps)')
+plt.ylabel('Amplitude')
+plt.grid()
 
-    if voids_hit[i].get_y() != voids_hit[i-1].get_y():
-        d[j*2] = voids_hit[i].get_y()+voids_hit[i].get_height() - voids_hit[i-1].get_y()
-        d[j*2+1] = voids_hit[i].get_height()
+# generate a large time series of the noise simulation and estimate the psd
+n_points = 10000
+nfft = 2000
 
-        j += 1
+# generate the noise
+v = noise_std * np.random.randn(n_points) + noise_mean
 
-theta = np.zeros(d.size+2)
-n = np.zeros(theta.shape, dtype=complex)
-n[0] = 1
-n[-1] = 1
-for i in range(1, len(n)-1):
-    if i % 2:  # odd
-        n[i] = n_fiberglass
-    else:
-        n[i] = 1.0
+n_hat = np.zeros(n_points)
+for i in range(1, n_points):
+    n_hat[i] = alpha1*n_hat[i-1] + v[i]
 
-gamma = sm.global_reflection_model(n, theta, freq, d, 2*n_layers_with_voids+1)
+n_hat2 = n_hat.reshape((50, 200))
 
-e1 = e0 * gamma[0]
+N_hat = np.abs(np.fft.rfft(n_hat2, nfft))**2
 
-return_amp = np.fft.irfft(e1) / dt
+Sn_hat = np.mean(N_hat, axis=0)
 
-plt.figure('Return Signal in Frequency Domain')
-plt.plot(freq, np.abs(e1), 'r')
-plt.title('Return Signal in Frequency Domain')
+plt.figure('Noise PSD Estimate')
+plt.plot(freq[:len(Sn_hat)], Sn_hat, 'r')
 plt.xlabel('Frequency (THz)')
 plt.ylabel('Amplitude')
 plt.xlim(0, 3.5)
 plt.grid()
-
-plt.figure('Return Signal in Time Domain')
-plt.plot(time, return_amp, 'r')
-plt.title('Return Signal in Time Domain')
-plt.xlabel('Time (ps)')
-plt.ylabel('Amplitude')
-plt.grid()
-"""
