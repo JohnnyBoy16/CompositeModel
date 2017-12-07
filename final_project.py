@@ -283,6 +283,11 @@ plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
 plt.grid()
 
+noise_mean = np.mean(noise_amp)
+noise_std = np.std(noise_amp)
+
+noise_amp -= noise_mean
+
 corr = np.correlate(noise_amp, noise_amp, mode='full')
 plt.figure('Noise Correlation')
 plt.plot(corr, linewidth=0.5)
@@ -290,22 +295,14 @@ plt.xlabel('Point')
 plt.ylabel('Correlation')
 plt.grid()
 
-noise_mean = np.mean(noise_amp)
-noise_std = np.std(noise_amp)
-
-alpha1 = 0.0057178463460362833
-alpha2 = 0.0045599247356917505
-
 # estimate alpha, time consuming
-alpha1 = 0
-alpha2 = 0
-for i in range(len(noise_amp)):
-    correlation = np.correlate(np.roll(noise_amp, i), np.roll(noise_amp, i+1), mode='full')
-    alpha1 += correlation[len(noise_amp)]
-    alpha2 += correlation[len(noise_amp)+1]
+alpha1 = 0.766452  # this is the alpha that is calculated below
 
-alpha1 /= len(noise_amp)
-alpha2 /= len(noise_amp)
+# for i in range(len(noise_amp)):
+#     correlation = np.correlate(np.roll(noise_amp, i), np.roll(noise_amp, i+1), mode='full')
+#     alpha1 += correlation[len(noise_amp)-1] / correlation.max()
+#
+# alpha1 /= len(noise_amp)
 
 noise_sim = np.zeros(len(noise_amp))
 noise_sim[0] = np.random.randn(1) * noise_std*10 + noise_mean  # initialize noise values
@@ -330,10 +327,10 @@ plt.grid()
 
 # generate a large time series of the noise simulation and estimate the psd
 n_points = 10000
-nfft = 2000
+nfft = 4096
 
 # generate the noise
-v = noise_std * np.random.randn(n_points) + noise_mean
+v = noise_std*10 * np.random.randn(n_points) + noise_mean
 
 n_hat = np.zeros(n_points)
 for i in range(1, n_points):
@@ -346,8 +343,10 @@ N_hat = np.abs(np.fft.rfft(n_hat2, nfft))**2
 Sn_hat = np.mean(N_hat, axis=0)
 
 plt.figure('Noise PSD Estimate')
-plt.plot(freq[:len(Sn_hat)], Sn_hat, 'r')
+plt.plot(freq, Sn_hat, 'r')
 plt.xlabel('Frequency (THz)')
 plt.ylabel('Amplitude')
 plt.xlim(0, 3.5)
 plt.grid()
+
+e1_flawed_noise = np.fft.rfft(
