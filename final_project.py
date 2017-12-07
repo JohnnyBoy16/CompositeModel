@@ -9,37 +9,39 @@ from matplotlib.collections import PatchCollection
 
 import sm_functions as sm
 
-sys.path.insert(0, 'C:\\PycharmProjects\\THzProcClass')
-from THzData import THzData
-
-basedir = 'C:\\Work\\Faint Defect Testing\\Yellow Composite'
-filename = 'Scan with Two Tape Defects F@FS (res=0.5mm).tvl'
-
-data = THzData(filename, basedir, gate=[[3111, 3302], [700, 900]])
-
-plt.figure('C-Scan Test')
-plt.imshow(data.c_scan, interpolation='none', cmap='gray', extent=data.c_scan_extent)
-plt.xlabel('X Scan Location (mm)')
-plt.ylabel('Y Scan Location (mm)')
-plt.colorbar()
-plt.grid()
-
-defect = data.c_scan[22:41, 46:60]
-normal_area = data.c_scan[22:41, 19:33]
-
-weights = np.ones_like(defect.flatten()) / defect.size
-
-plt.figure('Histogram')
-plt.hist(defect.flatten(), 15, weights=weights, facecolor='b', label='Tape')
-plt.hist(normal_area.flatten(), 15, weights=weights, facecolor='g', label='Normal')
-plt.title('Normalized Histogram of Pixel Values')
-plt.ylabel('Probability')
-plt.xlabel('Peak to Peak Voltage')
-plt.legend()
+# sys.path.insert(0, 'D:\\PycharmProjects\\THzProcClass')
+# from THzData import THzData
+#
+# basedir = 'D:\\Work\\Faint Defect Testing\\Yellow Composite'
+# filename = 'Scan with Two Tape Defects F@FS (res=0.5mm).tvl'
+#
+# data = THzData(filename, basedir, gate=[[3111, 3302], [700, 900]])
+#
+# plt.figure('C-Scan Test')
+# plt.imshow(data.c_scan, interpolation='none', cmap='gray', extent=data.c_scan_extent)
+# plt.xlabel('X Scan Location (mm)')
+# plt.ylabel('Y Scan Location (mm)')
+# plt.colorbar()
+# plt.grid()
+#
+# defect = data.c_scan[22:41, 46:60]
+# normal_area = data.c_scan[22:41, 19:33]
+#
+# weights = np.ones_like(defect.flatten()) / defect.size
+#
+# plt.figure('Histogram')
+# plt.hist(defect.flatten(), 15, weights=weights, facecolor='b', label='Tape')
+# plt.hist(normal_area.flatten(), 15, weights=weights, facecolor='g', label='Normal')
+# plt.title('Normalized Histogram of Pixel Values')
+# plt.ylabel('Probability')
+# plt.xlabel('Peak to Peak Voltage')
+# plt.legend()
 
 # the file that contains the reference waveform off of an aluminum plate
 ref_file = 'Refs\\ref 11JUL2016\\110 ps waveform.txt'
 
+# file that contains the noise taken when the laser was highly out of focus
+# should be just noise
 noise_file = 'NoiseWaveforms\\110 ps system noise.txt'
 
 # the number of layers in the composite
@@ -137,12 +139,13 @@ plt.xlim(0, 3.5)
 plt.grid()
 
 # whether or not there is a void in the composite layer
+# use a binomial random variable for simplicity
 void_in_layer = np.zeros(n_layers)
 for i in range(1, n_layers, 2):
     void_in_layer[i] = np.random.binomial(1, p_void)
 
 # print a warning if no voids were created in the simulation
-if not np.sum(void_in_layer):
+if np.sum(void_in_layer) == 0:
     print('No voids created in simulation!')
 
 for i in range(len(void_in_layer)):
@@ -153,6 +156,7 @@ for i in range(len(void_in_layer)):
 beam_corner = (-beam_width / 2, 0)
 beam = Rectangle(beam_corner, beam_width, thickness, facecolor='r', alpha=0.25)
 
+# build voids and add them to a list to keep track of
 void_list = list()
 for i in range(len(void_in_layer)):
     if void_in_layer[i]:
@@ -161,10 +165,17 @@ for i in range(len(void_in_layer)):
         void = Rectangle((x_corner, y_corner), void_size[0], -void_size[1])
         void_list.append(void)
 
-# TODO create a patch to add layers to diagram
+# build the layers for plotting
+layer_list = list()
+for i in range(1, n_layers, 2):
+    x_corner = -beam_width / 2
+    y_corner = (i + 1) // 2 * (t_fiberglass + t_epoxy)
+    layer = Rectangle((x_corner, y_corner), beam_width, -t_epoxy)
+    layer_list.append(layer)
 
 # create a patch collection object so we can plot the voids
-pc = PatchCollection(void_list)
+void_collection = PatchCollection(void_list, facecolor='blue', edgecolor='black')
+layer_collection = PatchCollection(layer_list, facecolor='brown', alpha=0.5)
 
 fig = plt.figure('Diagram of Simulation')
 axis = fig.add_subplot(111)
@@ -175,14 +186,15 @@ axis = fig.add_subplot(111)
 
 # add the voids to the diagram
 
-axis.add_collection(pc)
+axis.add_collection(layer_collection)
+axis.add_collection(void_collection)
 
 # add dotted lines where the layer boundaries are
 for i in range(1, n_layers):  # put a line at each layer boundary (middle of epoxy layer)
     layer_height = i * (t_fiberglass+t_epoxy) - (t_epoxy/2)
     plt.axhline(layer_height, color='k', linestyle='--', linewidth=0.5)
 
-plt.title('Diagram of Simulation')
+# plt.title('Diagram of Simulation')
 plt.xlabel('X Location (mm)')
 plt.ylabel('Depth into the composite (mm)')
 plt.ylim(thickness, 0)  # flip y-axis so layer 0 is on top
@@ -305,9 +317,9 @@ alpha1 = 0.766452  # this is the alpha that is calculated below
 # alpha1 /= len(noise_amp)
 
 noise_sim = np.zeros(len(noise_amp))
-noise_sim[0] = np.random.randn(1) * noise_std*10 + noise_mean  # initialize noise values
+# noise_sim[0] = np.random.randn(1) * noise_std + noise_mean  # initialize noise values
 
-w = np.random.randn(len(noise_amp))*noise_std*10 + noise_mean
+w = np.random.randn(len(noise_amp))*noise_std
 
 for i in range(1, len(noise_amp)):
     noise_sim[i] = alpha1*noise_sim[i-1] + w[i]
@@ -349,4 +361,4 @@ plt.ylabel('Amplitude')
 plt.xlim(0, 3.5)
 plt.grid()
 
-e1_flawed_noise = np.fft.rfft(
+# e1_flawed_noise = np.fft.rfft(
