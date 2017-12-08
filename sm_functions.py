@@ -1,20 +1,10 @@
 """
 Module that contains functions used in signal modelling codes
 """
-import numpy as np
-import csv
 import pdb
+import sys
 
-
-def refractive_index(echo_delta_t, thickness, c=0.2998):
-    """
-    Calculate the refractive index of a substance using the time domain echos
-    :param echo_delta_t: The difference in time between two echos (ps)
-    :param thickness: The difference in space between what causes the echos (mm)
-    :param c: The speed of light in mm/ps
-    :return: The refractive index of the substance
-    """
-    return c / (2 * thickness / echo_delta_t)
+import numpy as np
 
 
 def reflection_coefficient(n1, n2, theta1=0.0, theta2=0.0):
@@ -43,50 +33,6 @@ def transmission_coefficient(n1, n2, theta1=0, theta2=0):
     return 2*n1*np.cos(theta1) / (n1*np.cos(theta2) + n2*np.cos(theta1))
 
 
-def phase_screen_r(h, k, theta=0):
-    """
-    Adds the phase screen term from Jim Rose's paper for the reflection coefficient
-    :param h: The standard deviation or RMS height of the surface in m
-    :param k: The angular wavenumber of the incoming beam in meters
-    :param theta: The angle of the incoming ray in radians
-    :return: The exponential term to be multiplied by the reflection coefficient
-    """
-    term = np.exp(-2 * h**2 * k**2 * np.cos(theta)**2)
-    return term
-
-
-def phase_screen_t(h, k1, k2, theta1=0, theta2=0):
-    """
-    Adds the phase screen term from Jim Rose's paper for the transmission coefficient
-    :param h: The standard deviation or RMS height of the surface in meters
-    :param k1: The angular wavenumber of the incoming beam in meters
-    :param k2: The angular wavenumber of the outgoing beam in meters
-    :param theta1: The angle of the incoming ray in radians
-    :param theta2: The angle of the outgoing ray in radians
-    :return: The exponential term that is to be multiplied by the transmission coefficient
-    """
-    term = np.exp(-0.5*h**2 * (k2*np.cos(theta2) - k1*np.cos(theta1)) ** 2)
-    return term
-
-
-def read_reference_data(ref_file):
-    """
-    Reads in data from the reference txt file using the pandas library
-    :param ref_file: The path to the reference txt file
-    :return: optical_delay: An array of optical delay values (time array)
-             ref_amp: The amplitude of the reference signal at a given time
-    """
-    import pandas as pd
-
-    # Read in the reference waveform and separate out the optical delay (time)
-    # and the reference amplitude
-    reference_data = pd.read_csv(ref_file, delimiter='\t')
-    optical_delay = reference_data['Optical Delay/ps'].values
-    ref_amp = reference_data['Raw_Data/a.u.'].values
-
-    return optical_delay, ref_amp
-
-
 def get_theta_out(n0, n1, theta0):
     """
     Uses Snell's law to calculate the outgoing angle of light
@@ -100,86 +46,6 @@ def get_theta_out(n0, n1, theta0):
         n1 = float(n1)
 
     return np.arcsin(n0/n1 * np.sin(theta0))
-
-
-def read_alpha_data(alpha_file):
-    """
-    Reads in the alpha array that is output by Calibration Main.py
-    :param alpha_file: The path to the file that contains the alpha array
-    :return: alpha over the range of frequencies
-    """
-    with open(alpha_file, 'rb') as f:
-        freader = csv.reader(f, delimiter=',')
-        alpha = np.array(next(freader), dtype=float)
-
-    f.close()
-
-    return alpha
-
-
-def smooth_exponential_transition(e, delta):
-    """
-    Smooths out a frequency representation of a zero-padded signal by adding and exponential ramp
-    to the front end of the array
-    :param e: The frequency domain signal
-    :param delta: The spacing between points in the frequency domain
-    :return:
-    """
-    i = 0
-
-    # determine where the first non-zero term is
-    # first thing to do is check if array is complex, then make sure real and imaginary terms
-    # start and end at the same index
-    if np.iscomplexobj(e):  # complex numpy array
-        while e[i].real == 0 and e[i].imag == 0:
-            i += 1
-        if e[i].real == 0 or e[i].imag == 0:
-            print(i)
-            raise Warning('Real and Imaginary terms do not have the same starting index!')
-        start = i  # the index where the data starts
-
-        # determine the last index that contains a non zero term,
-        # i.e. start of zero padding
-        while e[i].real != 0 and e[i].imag != 0:
-            i += 1
-        # the last frequency term will always have an imaginary value of zero
-        if i != len(e)-1 and e[i].real != 0 or e[i].imag != 0:
-            raise Warning('Real and Imaginary terms do not have the same ending index!')
-        end = i  # the index where the data ends
-
-    else:  # not a complex numpy array, presumably of type int or float
-        while e[i] == 0:
-            i += 1
-        start = i
-
-        while i < len(e) and e[i] != 0:
-            i += 1
-        end = i
-
-    amplitude = e[start]
-
-    max_x = delta * start  # x value of first data point
-    x = np.arange(0, max_x, delta)
-
-    beta = np.log(0.001)
-    alpha = np.zeros(len(x), dtype=complex)
-
-    alpha.real = 1/max_x * (np.log(np.abs(amplitude.real)) - beta)
-    alpha.imag = 1/max_x * (np.log(np.abs(amplitude.imag)) - beta)
-
-    y = np.zeros(len(x), dtype=complex)
-    y.real = np.sign(amplitude.real) * np.exp(alpha.real * x + beta)
-    y.imag = np.sign(amplitude.imag) * np.exp(alpha.imag * x + beta)
-
-    # pdb.set_trace()
-    e[:start] = y
-
-    # only adjust last non-zero padded value if there are actually any zero padded values
-    # on the end
-    if end < len(e) - 1:
-        e[end+1] = e[end] / 2
-
-    return e
 
 
 def global_reflection_model(n, theta, freq, d, n_layers, coverage, c=0.2998):
@@ -240,64 +106,74 @@ def global_reflection_model(n, theta, freq, d, n_layers, coverage, c=0.2998):
     return gamma
 
 
-def reflection_equation(n, theta0, freq, d, n_layers, e0, e1, c=0.2998):
+def peak_detect(v, delta, x=None):
     """
-    Sets up an equation to back out the index of refraction of multilayer materials. This function
-    assumes that a negative imaginary index of refraction term leads to decay. If you pass in freq
-    e0, and e1 as an array, the code should attempt to optimize
-    :param n: The guess for the index of refraction of each layer, with real terms in the 1st axis
-                and imaginary terms in the second
-    :param theta0: The angle of the incoming beam in radians
-    :param freq: The frequency range that we are interested in solving for
-    :param d: The thickness of each layer in mm
-    :param n_layers: The number of layers in the structure
-    :param e0: The amplitude of the incoming signal over given frequency range
-    :param e1: The amplitude of the experimental signal over given frequency range\
-    :param c: the speed of light in mm/ps, default: 0.2998 mm/ps
-    :return The difference between the actual signal and the predicted signal
+    Converted from MATLAB script at http://billauer.co.il/peakdet.html
+
+    Returns two arrays
+
+    function [maxtab, mintab]=peakdet(v, delta, x)
+    %PEAKDET Detect peaks in a vector
+    %        [MAXTAB, MINTAB] = PEAKDET(V, DELTA) finds the local
+    %        maxima and minima ("peaks") in the vector V.
+    %        MAXTAB and MINTAB consists of two columns. Column 1
+    %        contains indices in V, and column 2 the found values.
+    %
+    %        With [MAXTAB, MINTAB] = PEAKDET(V, DELTA, X) the indices
+    %        in MAXTAB and MINTAB are replaced with the corresponding
+    %        X-values.
+    %
+    %        A point is considered a maximum peak if it has the maximal
+    %        value, and was preceded (to the left) by a value lower by
+    %        DELTA.
+
+    % Eli Billauer, 3.4.05 (Explicitly not copyrighted).
+    % This function is released to the public domain; Any use is allowed.
+
     """
-    n_real = np.ones(n_layers + 2)
-    n_imag = np.zeros(n_layers + 2)
-    n_real[1:n_layers + 1] = n[0]
-    n_imag[1:n_layers + 1] = n[1]
+    maxtab = []
+    mintab = []
 
-    n = n_real + 1j * n_imag
+    if x is None:
+        x = np.arange(len(v))
 
-    try:  # solving for multiple frequencies
-        # angle in each layer
-        theta = np.zeros((n_layers+2, len(freq)), dtype=complex)
+    v = np.asarray(v)
 
-    except TypeError:  # if freq isn't actually an array (single value)
-        theta = np.zeros(n_layers + 2, dtype=complex)
+    if len(v) != len(x):
+        sys.exit('Input vectors v and x must have same length')
 
-    # the incoming and outgoing angle are given
-    theta[0] = theta0
-    theta[-1] = theta0
+    if not np.isscalar(delta):
+        sys.exit('Input argument delta must be a scalar')
 
-    for i in range(1, n_layers+1):
-        theta[i] = get_theta_out(n[i-1], n[i], theta[i-1])
+    if delta <= 0:
+        sys.exit('Input argument delta must be positive')
 
-    # get the global reflection coefficient at each layer
-    gamma = global_reflection_model(n, theta, freq, d, n_layers, c)
+    mn, mx = np.Inf, -np.Inf
+    mnpos, mxpos = np.NaN, np.NaN
 
-    eq = e1/e0 - gamma[0]
+    lookformax = True
 
-    return eq
+    for i in np.arange(len(v)):
+        this = v[i]
+        if this > mx:
+            mx = this
+            mxpos = x[i]
+        if this < mn:
+            mn = this
+            mnpos = x[i]
 
+        if lookformax:
+            if this < mx - delta:
+                maxtab.append((mxpos, mx))
+                mn = this
+                mnpos = x[i]
+                lookformax = False
+        else:
+            if this > mn + delta:
+                mintab.append((mnpos, mn))
+                mx = this
+                mxpos = x[i]
+                lookformax = True
 
-def equation_wrapped(n, theta0, freq, d, n_layers, e0, e1, c=0.2998):
-    complex_solution = reflection_equation(n, theta0, freq, d, n_layers, e0, e1, c)
-
-    eq = np.zeros(2 * len(complex_solution))
-
-    # alternate the real and imaginary parts in the array
-    eq[0:len(eq):2] = complex_solution.real
-    eq[1:len(eq):2] = complex_solution.imag
-
-    return eq
-
-
-def smooth(y, box_size):
-    box = np.ones(box_size) / box_size
-    y_smooth = np.convolve(y, box, mode='same')
-    return y_smooth
+    # return maxtab, mintab # return as list for easier processing 14JUL2013
+    return np.array(maxtab), np.array(mintab)
