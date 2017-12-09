@@ -106,7 +106,7 @@ def global_reflection_model(n, theta, freq, d, n_layers, coverage, c=0.2998):
     return gamma
 
 
-def peak_detect(v, delta, x=None):
+def peak_detect(v, delta, x=None, dt=None):
     """
     Converted from MATLAB script at http://billauer.co.il/peakdet.html
 
