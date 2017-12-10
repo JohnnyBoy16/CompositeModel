@@ -2,7 +2,6 @@
 Module that contains functions used in signal modelling codes
 """
 import pdb
-import sys
 
 import numpy as np
 
@@ -106,74 +105,58 @@ def global_reflection_model(n, theta, freq, d, n_layers, coverage, c=0.2998):
     return gamma
 
 
-def peak_detect(v, delta, x=None, dt=None):
+def peak_detect(data, delta, t=None, dt=0, min_t=-np.inf, max_t=np.inf):
     """
-    Converted from MATLAB script at http://billauer.co.il/peakdet.html
-
-    Returns two arrays
-
-    function [maxtab, mintab]=peakdet(v, delta, x)
-    %PEAKDET Detect peaks in a vector
-    %        [MAXTAB, MINTAB] = PEAKDET(V, DELTA) finds the local
-    %        maxima and minima ("peaks") in the vector V.
-    %        MAXTAB and MINTAB consists of two columns. Column 1
-    %        contains indices in V, and column 2 the found values.
-    %
-    %        With [MAXTAB, MINTAB] = PEAKDET(V, DELTA, X) the indices
-    %        in MAXTAB and MINTAB are replaced with the corresponding
-    %        X-values.
-    %
-    %        A point is considered a maximum peak if it has the maximal
-    %        value, and was preceded (to the left) by a value lower by
-    %        DELTA.
-
-    % Eli Billauer, 3.4.05 (Explicitly not copyrighted).
-    % This function is released to the public domain; Any use is allowed.
-
+    Detect max peaks in a vector
+    :param data: the y values
+    :param delta: if the value preceding a higher value is less than the higher value by delta,
+        the preceding value is declared a peak
+    :param t: if t is passed to function the peak locations will be replaced with appropriate
+        locations from this array
+    :param dt: time difference expected between peaks, if a peak occurs but at spacing between
+        previous peak is smaller than dt, it will be ignored
+    :param min_t: algorithm will not look for peaks until this time value is passed
+    :param max_t: maximum time to consider looking for peaks. If this is passed function will
+        end, once it reaches this value
+    :return: array with locations in first column and values in second
     """
-    maxtab = []
-    mintab = []
 
-    if x is None:
-        x = np.arange(len(v))
+    if t is None:
+        t = np.arange(len(data))
 
-    v = np.asarray(v)
+    max_val = -np.inf
 
-    if len(v) != len(x):
-        sys.exit('Input vectors v and x must have same length')
+    max_pos = np.nan
 
-    if not np.isscalar(delta):
-        sys.exit('Input argument delta must be a scalar')
+    max_tab = list()
 
-    if delta <= 0:
-        sys.exit('Input argument delta must be positive')
+    old_max_pos = 0.0
 
-    mn, mx = np.Inf, -np.Inf
-    mnpos, mxpos = np.NaN, np.NaN
+    for i in range(len(data)):
+        cur_val = data[i]
+        cur_pos = t[i]
 
-    lookformax = True
+        if cur_pos < min_t:
+            continue
 
-    for i in np.arange(len(v)):
-        this = v[i]
-        if this > mx:
-            mx = this
-            mxpos = x[i]
-        if this < mn:
-            mn = this
-            mnpos = x[i]
+        if cur_pos > max_t:  # if we move past max_t: end function
+            return np.array(max_tab)
 
-        if lookformax:
-            if this < mx - delta:
-                maxtab.append((mxpos, mx))
-                mn = this
-                mnpos = x[i]
-                lookformax = False
-        else:
-            if this > mn + delta:
-                mintab.append((mnpos, mn))
-                mx = this
-                mxpos = x[i]
-                lookformax = True
+        if cur_pos - old_max_pos < dt:
+            max_val = -np.inf
+            continue
 
-    # return maxtab, mintab # return as list for easier processing 14JUL2013
-    return np.array(maxtab), np.array(mintab)
+        if cur_val > max_val:
+            max_val = cur_val
+            max_pos = t[i]
+
+        if cur_val < max_val-delta:
+            # pdb.set_trace()
+            max_tab.append((max_pos, max_val))
+            old_max_pos = max_pos
+
+            max_val = cur_val
+            max_pos = cur_pos
+
+    return np.array(max_tab)
+
