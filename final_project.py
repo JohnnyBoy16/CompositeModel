@@ -17,7 +17,7 @@ ref_file = 'Refs\\ref 11JUL2016\\110 ps waveform.txt'
 # should be just noise
 noise_file_base = 'NoiseWaveforms\\110 ps Noise Waveform '
 
-# number of noise waveforms to use
+# number of noise waveforms collected
 n_noise_waveforms = 25
 
 # the number of layers in the composite
@@ -37,12 +37,12 @@ beam_width = 1.5
 width = beam_width
 
 # the chance of having a void in each layer
-p_void = 0.4
+p_void = 1.0
 
 # width & height of the void in mm
 # for now have void occupy same thickness as epoxy, so the entire thickness of the composite
 # layer is occupied by the void if there is one
-void_size = np.array([beam_width, t_epoxy])
+void_size = np.array([beam_width/2, t_epoxy])
 
 n_fiberglass = 1.85 - 1j*0.02  # index of refraction of fiberglass
 n_epoxy = 1.45 - 1j*0.01  # index of refraction of the epoxy
@@ -53,6 +53,9 @@ n_epoxy = 1.45 - 1j*0.01  # index of refraction of the epoxy
 # incoming angle of the THz beam in degrees
 theta0 = 0.0
 theta0 *= np.pi / 180  # convert to radians
+
+# number to multiply noise waveforms by
+scale_factor = 50
 
 # thickness of the sample in mm
 thickness = n_layers//2*(t_fiberglass+t_epoxy) + t_fiberglass
@@ -67,8 +70,10 @@ ref_data = pd.read_csv(ref_file, delimiter='\t')
 time = ref_data['Optical Delay/ps'].values
 ref_amp = ref_data['Raw_Data/a.u.'].values
 
+data_length = len(ref_amp)
+
 # read in the noise data files
-noise_amp = np.zeros((25, len(ref_amp)))
+noise_amp = np.zeros((25, data_length))
 for i in range(n_noise_waveforms):
     noise_file = noise_file_base + str(i+1) + '.txt'
     noise_data = pd.read_csv(noise_file, delimiter='\t')
@@ -84,12 +89,12 @@ df = 1 / (len(time)*dt)
 
 freq = np.linspace(0, len(time)/2*df, len(time)//2+1)
 
-omega = freq * 2 * np.pi * 1e12  # create omega array for plotting
+omega = freq * 2 * np.pi * 1e12  # create omega array for plotting, convert from THz
 
 # gate to remove the front artifact signal
 gate = 400
 
-# remove the false signal
+# remove the false signal in the front that is always there
 ref_amp[:gate] = 0
 
 t1 = time[gate-25]
@@ -220,16 +225,6 @@ e1 = e0 * gamma[0]
 
 return_amp = np.fft.irfft(e1) / dt
 
-peak_times = [15.95, 19.44, 23.01, 26.59, 30.16, 33.72, 40.84]
-peak_amps = [0.391, 0.317, 0.229, 0.162, 0.109, 0.079, 0.027]
-
-# create a exponential fit to the data from the peaks of the modeled response
-p = curve_fit(lambda t, a, b: a*np.exp(b*t), peak_times, peak_amps,
-              p0=(1, -0.05))[0]
-
-x = np.linspace(10, 60, 500)
-y = p[0]*np.exp(p[1]*x)
-
 plt.figure('Sample with No Defects in Frequency Domain')
 plt.plot(freq, np.abs(e1), 'r')
 plt.title('Sample with No Defects in Frequency Domain')
@@ -238,12 +233,15 @@ plt.ylabel('Amplitude')
 plt.xlim(0, 3.5)
 plt.grid()
 
+model_peaks = sm.peak_detect(return_amp, delta=0.015, t=time, dt=3, max_t=50)
+
 plt.figure('Sample with No Defects in Time Domain')
 plt.plot(time, return_amp, 'r')
-plt.plot(x, y, 'k--')
+plt.plot(model_peaks[:, 0], model_peaks[:, 1], 'g*')
 plt.title('Sample with No Defects in Time Domain')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
+plt.ylim(-0.70, 0.55)
 plt.grid()
 
 ###################################################################################################
@@ -269,20 +267,21 @@ plt.ylabel('Amplitude')
 plt.xlim(0, 3.5)
 plt.grid()
 
+# run peak detection of model with flaws
+peak_values = sm.peak_detect(return_amp_flawed, delta=0.015, t=time, dt=3, max_t=50)
+
 plt.figure('Sample with Defects in Time Domain')
 plt.plot(time, return_amp_flawed, 'r')
-plt.plot(x, y, 'k--')
+plt.plot(peak_values[:, 0], peak_values[:, 1], 'g*')
 plt.title('Sample with Defects in Time Domain')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
+plt.ylim(-0.70, 0.55)
 plt.grid()
 
-print()
-print('Peak to Peak Value with no defects')
-print(return_amp[1750:2500].max() - return_amp[1750:2500].min())
-print()
-print('Peak to Peak value with defects')
-print(return_amp_flawed[1750:2500].max() - return_amp_flawed[1750:2500].min())
+# for i in range(1, len(peak_values)):
+#     if peak_values[i, 1] > model_peaks[i, 1]:
+#         print('Void in Epoxy Layer %d' % i)
 
 # Start analysis of the system noise
 
@@ -294,14 +293,14 @@ plt.ylabel('Amplitude')
 plt.grid()
 
 noise_mean = np.mean(noise_amp)
-print(noise_mean)
 
-# estimate the standard deviation
+# estimate the standard deviation along each measurement
 noise_std = np.std(noise_amp, axis=1)
 noise_std = np.mean(noise_std)
+noise_var = noise_std**2
 
 # subtract the mean noise level from the system noise so we
-# can determine AR1 bandwith parameter
+# can determine AR1 bandwidth parameter
 noise_amp -= noise_mean
 
 # plot an example correlation from the first noise waveform
@@ -313,7 +312,7 @@ correlation /= n_noise_waveforms
 
 plt.figure('Average Noise Correlation')
 plt.plot(correlation[correlation.argmax():], 'ro-')
-plt.title('Noise Correlation')
+plt.title('Noise Correlation Averaged')
 plt.xlabel('Data Point')
 plt.ylabel('Correlation')
 plt.grid()
@@ -321,7 +320,7 @@ plt.grid()
 corr = np.correlate(noise_amp[0], noise_amp[0], mode='full')
 plt.figure('Noise Correlation')
 plt.plot(corr[corr.argmax():], 'ro-')
-plt.title('Noise Correlation')
+plt.title('Noise Correlation of a Single Measurement')
 plt.xlabel('Point')
 plt.ylabel('Correlation')
 plt.grid()
@@ -334,7 +333,7 @@ noise_psd = noise_psd.mean(axis=0)
 N_hat_dB = 10*np.log10(noise_psd)
 
 plt.figure('Noise PSD Estimate')
-plt.plot(omega, N_hat_dB[:len(omega)], 'r', linewidth=0.5)
+plt.plot(omega, N_hat_dB[:len(omega)], 'r', linewidth=0.5)  # only plot one side of spectrum
 plt.xlabel(r'Frequency ($\omega$)')
 plt.ylabel('Power (dB)')
 plt.grid()
@@ -342,7 +341,7 @@ plt.grid()
 alpha = 0
 for i in range(n_noise_waveforms):
     correlation = np.correlate(noise_amp[i, :], noise_amp[i, :], mode='full')
-    alpha += correlation[len(noise_amp[0])] / correlation.max()  # R(1) / R(0)
+    alpha += correlation[data_length] / correlation.max()  # R(1) / R(0)
 
 alpha /= n_noise_waveforms
 
@@ -350,33 +349,34 @@ alpha /= n_noise_waveforms
 var_w = noise_std**2 - alpha**2 * noise_std**2
 sigma_w = np.sqrt(var_w)
 
-noise_sim = np.zeros(len(noise_amp[0])+500)
+noise_sim = np.zeros(data_length+500)
 
-w = np.random.normal(0, sigma_w, len(noise_amp[0])+500)
+w = np.random.normal(0, sigma_w, data_length+500)
 
 # determine the constant in the AR process
 c = noise_mean - alpha*noise_mean
 
-for i in range(1, len(noise_amp[0])+500):
+for i in range(1, data_length+500):
     noise_sim[i] = c + alpha*noise_sim[i-1] + w[i]
 
 noise_sim = noise_sim[500:]  # throw away the first 500 points
 
-plt.figure('Noise Simulation')
+plt.figure('AR1 Noise Simulation')
 plt.plot(time, noise_sim, 'r', linewidth=0.5)
+plt.title('AR1 Noise Simulation')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
 plt.grid()
 
-noise_sim *= 25
+noise_sim *= scale_factor
 
 # measure signal from composite
-signal_and_noise = return_amp_flawed+noise_sim
+signal_and_noise = return_amp_flawed + noise_amp[1, :]*scale_factor
 
 # Plot an example of the measured signal with noise
-plt.figure('Sample with Defects and Noise in Time Domain')
+plt.figure('Sample with Defects and Noise Time Domain')
 plt.plot(time, signal_and_noise, 'r')
-plt.title('Sample with Defects in Time Domain')
+plt.title('Sample with Defects and Noise')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
 plt.grid()
@@ -393,7 +393,7 @@ for i in range(1, n_points+500):
 
 n_hat = n_hat[500:]  # throw aways first 500 points
 
-n_hat2 = n_hat.reshape((50, 2048)) * 25
+n_hat2 = n_hat.reshape((50, 2048)) * scale_factor
 
 N_hat = np.abs(np.fft.fft(n_hat2, nfft))**2
 
@@ -401,81 +401,61 @@ Sn_hat = np.mean(N_hat, axis=0)
 
 Sn_hat_dB = 10*np.log10(Sn_hat)
 
-plt.figure('Noise Simulation PSD Estimate')
-plt.plot(omega, Sn_hat_dB[:len(omega)], 'r', linewidth=0.5)
+plt.figure('Noise Simulation AR(1) PSD Estimate')
+plt.plot(omega, Sn_hat_dB[:len(omega)], 'r', linewidth=0.5)  # plot one-sides spectrum
 plt.xlabel(r'Frequency ($\omega$)')
 plt.ylabel('Power (dB)')
 plt.grid()
 
-# simulate measuring the sample area of the sample multiple
-# times to get a better estimate of Sx
-n_sim = 50
-sx = np.zeros((n_sim, len(return_amp)+500))
+Ss = np.abs(np.fft.fft(return_amp))**2  # expected signal psd is fft of return amplitude
+Ss_dB = np.log10(Ss)
 
-w = np.random.normal(0, sigma_w, (n_sim, len(return_amp)+500))
-for i in range(n_sim):
-    for j in range(1, len(return_amp)):
-        sx[i, j] = c + alpha*sx[i, j-1] + w[i, j]
+H = Ss / (Ss + Sn_hat)
 
-# throw away the extra points at the beginning
-sx = sx[:, 500:]
-
-sx *= 25  # scale up noise
-
-# add the composite with voids model to the noise
-for i in range(n_sim):
-    sx[i, :] += return_amp_flawed
-
-# create psd of measured_signal
-Sx_hat = np.abs(np.fft.fft(sx, nfft))**2
-
-# take the mean of each fft, down column
-Sx_hat = np.mean(Sx_hat, axis=0)
-
-Sx_hat_dB = 10*np.log10(Sx_hat)
-
-plt.figure('Model with Noise PSD Estimate')
-plt.plot(omega, Sx_hat_dB[:len(omega)], 'r', linewidth=0.5)
-plt.xlabel('Frequency ($\omega$)')
-plt.ylabel('Power (dB)')
-plt.grid()
-
-plt.figure('Noise & Signal+Noise PSD Estimates')
-plt.plot(omega, Sn_hat_dB[:len(omega)], 'k', linewidth=0.5)
-plt.plot(omega, Sx_hat_dB[:len(omega)], 'b', linewidth=0.5)
+plt.figure('Wiener Filter')
+plt.plot(omega, H[:len(omega)], 'r', linewidth=0.75)
 plt.xlabel(r'Frequency ($\omega$)')
-plt.ylabel('Power (dB)')
+plt.ylabel('Filter Value')
 plt.grid()
 
-H_hat = 1 - Sn_hat / Sx_hat
+sx = return_amp_flawed + noise_amp[0] * scale_factor  # add the model with flaws to the noise
 
-for i in range(len(H_hat)):
-    if H_hat[i] < 0:
-        H_hat[i] = 0
-
-plt.figure('Estimated Wiener Filter')
-plt.plot(omega, H_hat[:len(omega)], 'r', linewidth=0.75)
-plt.xlabel(r'Frequency ($\omega$)')
-plt.ylabel('Filter Estimate')
-plt.grid()
-
-# generate a new noise set to use with wiener filter
-sx = np.zeros(len(return_amp)+500)
-
-w = np.random.normal(0, sigma_w, len(return_amp)+500)
-for i in range(1, len(return_amp)):
-    sx[i] = c + alpha*sx[i] + w[i]
-
-sx = sx[500:] * 25
-
-sx += return_amp_flawed  # add the model with flaws to the noise
-
-S_hat_estimate = H_hat * np.fft.fft(sx)
-
+# now take signal estimate with true wiener filter
+S_hat_estimate = H * np.fft.fft(sx)
 s_estimate = np.fft.ifft(S_hat_estimate)
+
+filtered_peaks = sm.peak_detect(s_estimate, delta=0.015, t=time, dt=3, min_t=14.5, max_t=50)
+
+for i in range(1, len(model_peaks)):
+    if filtered_peaks[i, 1] > model_peaks[i, 1]:
+        print('Void in Epoxy Layer %d' % i)
 
 plt.figure('Estimated Signal')
 plt.plot(time, s_estimate, 'r')
+# plt.plot(filtered_peaks[:, 0], filtered_peaks[:, 1], 'g*')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
+plt.ylim(-0.62, 0.45)
 plt.grid()
+
+# try and use Kalman filter to estimate ar1 parameter of actual system noise
+Q = 0.001
+xhat_old = 0.764
+P_old = Q
+F = 1
+I = 1
+z = noise_amp[0, :]
+
+K = np.zeros(data_length)
+x_hat = np.zeros(data_length)
+for i in range(1, data_length):
+    H = z[i-1]
+    R = np.max([0, 1-xhat_old**2])
+    Kk = P_old*H*(H*P_old*H+R)**-1
+    K[i] = Kk
+    xhatk = xhat_old + Kk*(z[i]-H*xhat_old)
+    x_hat[i] = xhatk
+    Pk = (I-Kk*H)*P_old
+    xhat_old = F*xhatk
+    P_old = F*Pk*F + Q
+
