@@ -238,7 +238,7 @@ model_peaks = sm.peak_detect(return_amp, delta=0.015, t=time, dt=3, max_t=50)
 plt.figure('Sample with No Defects in Time Domain')
 plt.plot(time, return_amp, 'r')
 plt.plot(model_peaks[:, 0], model_peaks[:, 1], 'g*')
-plt.title('Sample with No Defects in Time Domain')
+plt.title('Sample with No Defects')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
 plt.ylim(-0.70, 0.55)
@@ -326,7 +326,7 @@ plt.ylabel('Correlation')
 plt.grid()
 
 # take a look at the psd by taking splitting noise into 50, 2048 point arrays
-noise_reshaped = noise_amp.reshape((50, 2048))
+noise_reshaped = noise_amp.reshape((50, 2048)) * scale_factor
 noise_psd = np.abs(np.fft.fft(noise_reshaped, n=len(noise_amp[0]), axis=1))**2
 noise_psd = noise_psd.mean(axis=0)
 
@@ -334,6 +334,7 @@ N_hat_dB = 10*np.log10(noise_psd)
 
 plt.figure('Noise PSD Estimate')
 plt.plot(omega, N_hat_dB[:len(omega)], 'r', linewidth=0.5)  # only plot one side of spectrum
+plt.title('True Noise PSD Estimate')
 plt.xlabel(r'Frequency ($\omega$)')
 plt.ylabel('Power (dB)')
 plt.grid()
@@ -392,6 +393,7 @@ for i in range(1, n_points+500):
     n_hat[i] = c + alpha*n_hat[i-1] + w[i]
 
 n_hat = n_hat[500:]  # throw aways first 500 points
+n_hat -= n_hat.mean()  # subtract mean from itself
 
 n_hat2 = n_hat.reshape((50, 2048)) * scale_factor
 
@@ -403,6 +405,7 @@ Sn_hat_dB = 10*np.log10(Sn_hat)
 
 plt.figure('Noise Simulation AR(1) PSD Estimate')
 plt.plot(omega, Sn_hat_dB[:len(omega)], 'r', linewidth=0.5)  # plot one-sides spectrum
+plt.title('AR(1) Noise Simulation PSD Estimate')
 plt.xlabel(r'Frequency ($\omega$)')
 plt.ylabel('Power (dB)')
 plt.grid()
@@ -439,7 +442,7 @@ plt.ylim(-0.62, 0.45)
 plt.grid()
 
 # try and use Kalman filter to estimate ar1 parameter of actual system noise
-Q = 0.001
+Q = 0.1
 xhat_old = 0.764
 P_old = Q
 F = 1
@@ -459,3 +462,5 @@ for i in range(1, data_length):
     xhat_old = F*xhatk
     P_old = F*Pk*F + Q
 
+plt.figure()
+plt.plot(x_hat)
