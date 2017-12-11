@@ -37,7 +37,7 @@ beam_width = 1.5
 width = beam_width
 
 # the chance of having a void in each layer
-p_void = 1.0
+p_void = 0.3
 
 # width & height of the void in mm
 # for now have void occupy same thickness as epoxy, so the entire thickness of the composite
@@ -138,7 +138,7 @@ if np.sum(void_in_layer) == 0:
 
 for i in range(len(void_in_layer)):
     if void_in_layer[i]:
-        print('void in layer', (i+1))
+        print('Void Generated in Layer', ((i+1)//2))
 
 # for now we will assume that the void will be fully covered by the beam
 beam_corner = (-beam_width / 2, 0)
@@ -148,6 +148,9 @@ beam = Rectangle(beam_corner, beam_width, thickness, facecolor='r', alpha=0.25)
 void_list = list()
 for i in range(len(void_in_layer)):
     if void_in_layer[i]:
+        void_size[0] = np.random.normal(beam_width/2, 0.5, 1)
+        while void_size[0] < 0.0:  # make sure void width is larger than 0
+            void_size[0] = np.random.normal(beam_width/2, 0.5, 1)
         x_corner = -void_size[0] / 2
         y_corner = (i+1)//2 * (t_fiberglass+t_epoxy)
         void = Rectangle((x_corner, y_corner), void_size[0], -void_size[1])
@@ -243,7 +246,6 @@ plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
 plt.ylim(-0.70, 0.55)
 plt.grid()
-
 ###################################################################################################
 
 # now change coverage based on whether this is a void or not and build the model with defects
@@ -411,56 +413,93 @@ plt.ylabel('Power (dB)')
 plt.grid()
 
 Ss = np.abs(np.fft.fft(return_amp))**2  # expected signal psd is fft of return amplitude
-Ss_dB = np.log10(Ss)
+Ss_dB = 10 * np.log10(Ss)
+
+Ss_defects = np.abs(np.fft.fft(return_amp_flawed))**2
+Ss_dB_defects = 10 * np.log10(Ss_defects)
+
+plt.figure('PSD of Model with No Defects')
+plt.plot(omega, Ss_dB[:len(omega)], 'r')  # plot one sided psd
+plt.title('PSD of Model with No Defects')
+plt.xlabel(r'Frequency ($\omega$)')
+plt.ylabel('Power (dB)')
+plt.grid()
+
+plt.figure('PSD of Model with Defects')
+plt.plot(omega, Ss_dB_defects[:len(omega)], 'r')
+plt.title('PSD of Model with Defects')
+plt.xlabel(r'Frequency ($\omega$)')
+plt.ylabel('Power (dB)')
+plt.grid()
 
 H = Ss / (Ss + Sn_hat)
 
 plt.figure('Wiener Filter')
 plt.plot(omega, H[:len(omega)], 'r', linewidth=0.75)
+plt.title('Wiener Filter')
 plt.xlabel(r'Frequency ($\omega$)')
 plt.ylabel('Filter Value')
 plt.grid()
 
-sx = return_amp_flawed + noise_amp[0] * scale_factor  # add the model with flaws to the noise
+# add the model with flaws to the noise
+which_noise = np.random.randint(0, n_noise_waveforms)
+sx = return_amp_flawed + noise_amp[which_noise] * scale_factor
 
 # now take signal estimate with true wiener filter
 S_hat_estimate = H * np.fft.fft(sx)
 s_estimate = np.fft.ifft(S_hat_estimate)
 
-filtered_peaks = sm.peak_detect(s_estimate, delta=0.015, t=time, dt=3, min_t=14.5, max_t=50)
+filtered_peaks = sm.peak_detect(s_estimate, delta=0.025, t=time, dt=3, min_t=14.5, max_t=50).real
 
+# add cushion[0] as 0, this is front surface, which we aren't checking because there can't be a
+# void there
+cushion = (0, 0.05, 0.04742, 0.0387, 0.02925, 0.015, 0.012,
+           0.01318, 0.01025, 0.00552)
+
+# check to see if we found void
+detection = list()
+false_alarm = list()
+miss = list()
+# start at 1 to ignore front surface
 for i in range(1, len(model_peaks)):
-    if filtered_peaks[i, 1] > model_peaks[i, 1]:
-        print('Void in Epoxy Layer %d' % i)
+    # correct detection
+    if filtered_peaks[i, 1] > model_peaks[i, 1] + cushion[i] and void_in_layer[i*2-1]:
+        print('Correct Detection in Layer %d' % i)
+        detection.append(filtered_peaks[i, :])
+
+    # false alarm
+    elif filtered_peaks[i, 1] > model_peaks[i, 1] + cushion[i] and not void_in_layer[i*2-1]:
+        print('False alarm in layer %d' % i)
+        false_alarm.append(filtered_peaks[i, :])
+
+    # miss
+    elif filtered_peaks[i, 1] < model_peaks[i, 1] + cushion[i] and void_in_layer[i*2-1]:
+        print('Miss in layer %d' % i)
+        miss.append(filtered_peaks[i, :])
+
+# convert from list to array so we can plot everything at once
+detection = np.array(detection)
+false_alarm = np.array(false_alarm)
+miss = np.array(miss)
 
 plt.figure('Estimated Signal')
 plt.plot(time, s_estimate, 'r')
-# plt.plot(filtered_peaks[:, 0], filtered_peaks[:, 1], 'g*')
+# handle errors if arrays are empty
+try:
+    plt.plot(detection[:, 0], detection[:, 1], 'g*', label='Detection')
+except IndexError:
+    pass
+try:
+    plt.plot(miss[:, 0], miss[:, 1], 'c*', label='Miss')
+except IndexError:
+    pass
+try:
+    plt.plot(false_alarm[:, 0], false_alarm[:, 1], 'k*', label='False Alarm')
+except IndexError:
+    pass
+plt.title('Estimated Signal')
 plt.xlabel('Time (ps)')
 plt.ylabel('Amplitude')
 plt.ylim(-0.62, 0.45)
+plt.legend()
 plt.grid()
-
-# try and use Kalman filter to estimate ar1 parameter of actual system noise
-Q = 0.1
-xhat_old = 0.764
-P_old = Q
-F = 1
-I = 1
-z = noise_amp[0, :]
-
-K = np.zeros(data_length)
-x_hat = np.zeros(data_length)
-for i in range(1, data_length):
-    H = z[i-1]
-    R = np.max([0, 1-xhat_old**2])
-    Kk = P_old*H*(H*P_old*H+R)**-1
-    K[i] = Kk
-    xhatk = xhat_old + Kk*(z[i]-H*xhat_old)
-    x_hat[i] = xhatk
-    Pk = (I-Kk*H)*P_old
-    xhat_old = F*xhatk
-    P_old = F*Pk*F + Q
-
-plt.figure()
-plt.plot(x_hat)
